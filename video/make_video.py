@@ -88,6 +88,7 @@ def make_gradient(top_alpha, bottom_alpha, start=0.0):
 
 GRAD_BOTTOM = make_gradient(30, 250, 0.22)
 GRAD_FULL = make_gradient(150, 235, 0.0)
+GRAD_TOP = make_gradient(0, 230, 0.55).transpose(Image.FLIP_TOP_BOTTOM)
 
 
 def vignette():
@@ -222,34 +223,27 @@ def build_scenes(p1, p2, collage):
     cfull = cbg.copy()
     cfull.paste(cfit, ((W - cfit.width) // 2, 0))
 
-    def s_intro(t):
-        fr = dark_bg(t)
-        lines = [
-            L("A proud and", 0.5, 92, F_XBOLD),
-            L("emotional milestone", 0.8, 92, F_XBOLD),
-            L([("for ", WHITE), ("Game2Grow!", ACCENT)], 1.15, 92, F_XBOLD),
-        ]
-        y = (H - lines_height(lines)) / 2 + 60
-        # heart pops in with a gentle beat
-        hp = ease_out((t - 1.7) / 0.5)
+    def s_open(t, dur=6.3):
+        # Hook: the news is on screen from the very first frame.
+        fr = photo_frame(p1, t, dur, fit_box(960, 700, 900, p1), fit_box(960, 740, 800, p1))
+        fr.alpha_composite(GRAD_TOP)
+        hp = ease_out((t - 0.9) / 0.5)
         if hp > 0:
             hl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            beat = 1 + 0.06 * max(0, math.sin((t - 1.7) * 2 * math.pi * 1.1)) ** 6
+            beat = 1 + 0.07 * max(0, math.sin((t - 0.9) * 2 * math.pi * 1.1)) ** 6
             over = 1 + 0.25 * math.sin(min(hp, 1) * math.pi) * (1 - hp)
-            heart(ImageDraw.Draw(hl), W / 2, y - 120, 5.2 * hp * beat * over, (240, 60, 80, int(255 * hp)))
-            sh = hl.filter(ImageFilter.GaussianBlur(26))
-            fr.alpha_composite(sh)
+            heart(ImageDraw.Draw(hl), W / 2, 112, 2.6 * hp * beat * over, (240, 60, 80, int(255 * hp)))
+            fr.alpha_composite(hl.filter(ImageFilter.GaussianBlur(14)))
             fr.alpha_composite(hl)
-        draw_lines(fr, lines, t, y)
-        return fr
-
-    def s_mou(t, dur=5.8):
-        fr = photo_frame(p1, t, dur, fit_box(800, 650, 1000, p1), fit_box(960, 720, 860, p1))
-        kicker(fr, "BIG NEWS", t, 0.3, 790)
+        top = [
+            L("A proud and emotional milestone", 0.6, 50, F_BOLD),
+            L([("for ", WHITE), ("Game2Grow!", ACCENT)], 0.85, 50, F_BOLD),
+        ]
+        draw_lines(fr, top, t, 170, gap=8)
         lines = [
-            L("Game2Grow has signed its", 0.5, 58, F_SEMI),
-            L([("FIRST MoU", ACCENT)], 0.9, 138, F_BLACK, underline=True),
-            L("with SNS!", 1.4, 80, F_XBOLD),
+            L("Game2Grow has signed its", -0.55, 58, F_SEMI),
+            L([("FIRST MoU", ACCENT)], -0.5, 150, F_BLACK, underline=True),
+            L("with SNS!", -0.45, 84, F_XBOLD),
         ]
         draw_lines(fr, lines, t, 880, gap=10)
         return fr
@@ -326,34 +320,43 @@ def build_scenes(p1, p2, collage):
     def s_outro(t):
         fr = dark_bg(t + 40)
         lines = [
-            L([("Game", WHITE), ("2", ACCENT), ("Grow", WHITE)], 0.6, 112, F_BLACK),
-            L("First MoU with SNS Institutions", 1.1, 46, F_MED, color=(210, 216, 230)),
+            L([("Game", WHITE), ("2", ACCENT), ("Grow", WHITE)], 0.3, 120, F_BLACK),
         ]
-        draw_lines(fr, lines, t, 500, gap=24)
-        # divider + site
-        p2_ = ease_out((t - 1.6) / 0.8)
+        draw_lines(fr, lines, t, 400)
+        cta = [
+            L("Want practical AI training", 1.0, 56, F_BOLD),
+            L([("for your ", WHITE), ("campus or team?", ACCENT)], 1.3, 56, F_BOLD),
+        ]
+        draw_lines(fr, cta, t, 600, gap=14)
+        p2_ = ease_out((t - 2.1) / 0.8)
         if p2_ > 0:
             l2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             d2 = ImageDraw.Draw(l2)
-            wline = 220 * p2_
-            d2.rounded_rectangle((W / 2 - wline / 2, 800, W / 2 + wline / 2, 806), 3, fill=CORAL + (255,))
-            d2.text((W / 2, 870), "game2growsolutions.com", font=font(F_SEMI, 44),
-                    fill=WHITE + (int(255 * p2_),), anchor="mm")
+            a = int(255 * p2_)
+            f = font(F_BOLD, 46)
+            txt = "game2growsolutions.com"
+            tw = d2.textlength(txt, font=f)
+            pw, ph = (tw + 90) * (0.9 + 0.1 * p2_), 96
+            d2.rounded_rectangle((W / 2 - pw / 2, 820, W / 2 + pw / 2, 820 + ph), ph / 2, fill=CORAL + (a,))
+            d2.text((W / 2, 820 + ph / 2), txt, font=f, fill=WHITE + (a,), anchor="mm")
             fr.alpha_composite(l2)
         return fr
 
     return [
-        (0.0, s_intro),
-        (4.5, s_mou),
-        (10.3, s_special),
-        (16.6, s_mba),
-        (24.9, s_years),
-        (31.2, s_today),
-        (38.5, s_outro),
+        (0.0, s_open),
+        (6.3, s_special),
+        (12.6, s_mba),
+        (20.9, s_years),
+        (27.2, s_today),
+        (34.5, s_outro),
     ]
 
 
-TOTAL = 44.0
+TOTAL = 41.0
+
+
+_rng = np.random.default_rng(7)
+GRAIN = [(_rng.normal(0, 2.5, (H, W, 1))).astype(np.int16) for _ in range(6)]
 
 
 def render_frame(scenes, t):
@@ -366,10 +369,12 @@ def render_frame(scenes, t):
         a = ease_in_out((t - st) / XF)
         fr = Image.blend(prev, fr, a)
     # fade in from / out to black
-    k = min(1.0, t / 0.6, (TOTAL - t) / 1.2)
+    k = min(1.0, (TOTAL - t) / 1.2)
     if k < 1:
         fr = Image.blend(Image.new("RGBA", (W, H), (0, 0, 0, 255)), fr, max(k, 0))
-    return fr.convert("RGB")
+    # light film grain ties the photos together and hides upscaling softness
+    arr = np.asarray(fr.convert("RGB"), dtype=np.int16) + GRAIN[(int(t * FPS) // 2) % len(GRAIN)]
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
 
 # ---------------------------------------------------------------- music
@@ -397,7 +402,7 @@ def make_music(path, dur=TOTAL, sr=44100):
             tone *= 1 + 0.004 * np.sin(2 * np.pi * 0.25 * tt)
             out[i0:i1] += 0.05 * env * tone
         # soft piano-like arpeggio, starts after the intro
-        if t0 >= 4:
+        if True:
             arp = [ch[2] + 12, ch[3] + 12, ch[4] + 12, ch[3] + 12, ch[2] + 12, ch[3] + 12, ch[4] + 12, ch[4] + 19]
             for k, m in enumerate(arp):
                 s0 = t0 + k * 0.5
@@ -421,7 +426,7 @@ def make_music(path, dur=TOTAL, sr=44100):
         rev += tmp
     out = 0.7 * out + 0.45 * rev
 
-    fade = np.minimum(1, t / 1.5) * np.minimum(1, (dur - t) / 3.0)
+    fade = np.minimum(1, t / 0.3) * np.minimum(1, (dur - t) / 3.0)
     out *= np.clip(fade, 0, 1)
     out /= np.max(np.abs(out)) + 1e-9
     out *= 0.6
@@ -447,7 +452,7 @@ def main():
     make_music(wav)
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
            "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-i", wav,
-           "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
+           "-c:v", "libx264", "-preset", "slow", "-crf", "20", "-tune", "grain", "-pix_fmt", "yuv420p",
            "-profile:v", "high", "-movflags", "+faststart",
            "-c:a", "aac", "-b:a", "192k", "-shortest", out]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
