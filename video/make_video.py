@@ -324,7 +324,7 @@ def build_scenes(p1, p2, collage):
         ]
         draw_lines(fr, lines, t, 400)
         cta = [
-            L("Want practical AI training", 1.0, 56, F_BOLD),
+            L("Want experiential training", 1.0, 56, F_BOLD),
             L([("for your ", WHITE), ("campus or team?", ACCENT)], 1.3, 56, F_BOLD),
         ]
         draw_lines(fr, cta, t, 600, gap=14)
