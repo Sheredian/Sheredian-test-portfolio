@@ -6,6 +6,7 @@ with numpy so the video has no outside assets or license issues.
 Usage: python3 make_video.py <photo1> <photo2> <collage> <out.mp4>
 """
 import math
+import os
 import subprocess
 import sys
 import wave
@@ -13,7 +14,11 @@ import wave
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-W, H, FPS = 1080, 1350, 30
+REEL = os.environ.get("REEL") == "1"
+# Feed post is 4:5. Reel is 9:16 and pushes text down into the reel safe zone.
+W, H, FPS = (1080, 1920, 30) if REEL else (1080, 1350, 30)
+DY = 300 if REEL else 0   # vertical shift for text
+KS = 0.75 if REEL else 1.0  # narrower crops for the tall frame
 XF = 0.7  # crossfade seconds
 
 FONT_DIR = "/usr/share/fonts/opentype/inter/"
@@ -62,8 +67,8 @@ def ken_burns(img, t, dur, box0, box1):
 
 
 def fit_box(cx, cy, w, img):
-    """4:5 crop box of width w centred on (cx, cy), kept inside the image."""
-    w = min(w, img.width, img.height * W / H)
+    """Frame-shaped crop box of width w centred on (cx, cy), kept inside the image."""
+    w = min(w * KS, img.width, img.height * W / H)
     h = w * H / W
     x0 = min(max(cx - w / 2, 0), img.width - w)
     y0 = min(max(cy - h / 2, 0), img.height - h)
@@ -203,6 +208,42 @@ def photo_frame(img, t, dur, b0, b1, grad=GRAD_BOTTOM):
     return fr
 
 
+# Reel only: a landscape photo shown as a wide band over a blurred fill,
+# so nobody gets cropped out of the tall frame.
+BAND_TOP, BAND_H = 430, 760
+_bg_cache = {}
+
+
+def band_frame(img, t, dur, c0, c1):
+    """c0/c1: (cx, cy, w) in source pixels, start and end of the move."""
+    key = id(img)
+    if key not in _bg_cache:
+        sc = max(W / img.width, H / img.height)
+        bg = img.resize((int(img.width * sc) + 1, int(img.height * sc) + 1))
+        bg = bg.crop(((bg.width - W) // 2, (bg.height - H) // 2,
+                      (bg.width - W) // 2 + W, (bg.height - H) // 2 + H))
+        bg = bg.filter(ImageFilter.GaussianBlur(45)).convert("RGBA")
+        bg.alpha_composite(Image.new("RGBA", (W, H), NAVY + (150,)))
+        _bg_cache[key] = bg
+    fr = _bg_cache[key].copy()
+    e = ease_in_out(t / dur)
+    cx, cy, w = (a + (b - a) * e for a, b in zip(c0, c1))
+    h = w * BAND_H / W
+    x0 = min(max(cx - w / 2, 0), img.width - w)
+    y0 = min(max(cy - h / 2, 0), img.height - h)
+    band = img.resize((W, BAND_H), Image.LANCZOS, box=(x0, y0, x0 + w, y0 + h)).convert("RGBA")
+    # soft fade on the top and bottom edges of the band
+    m = Image.new("L", (1, BAND_H), 255)
+    for y in range(90):
+        v = int(255 * (y / 90) ** 1.5)
+        m.putpixel((0, y), v)
+        m.putpixel((0, BAND_H - 1 - y), v)
+    band.putalpha(m.resize((W, BAND_H)))
+    fr.alpha_composite(band, (0, BAND_TOP))
+    fr.alpha_composite(GRAD_BOTTOM)
+    return fr
+
+
 # ---------------------------------------------------------------- scenes
 
 def build_scenes(p1, p2, collage):
@@ -218,34 +259,38 @@ def build_scenes(p1, p2, collage):
     cbg = collage.resize((W, int(W * collage.height / collage.width)))
     cbg = cbg.crop((0, (cbg.height - H) // 2, W, (cbg.height - H) // 2 + H))
     cbg = cbg.filter(ImageFilter.GaussianBlur(40))
-    s = H / collage.height
-    cfit = collage.resize((int(collage.width * s), H), Image.LANCZOS)
+    s = min(H / collage.height, W / collage.width)
+    cfit = collage.resize((int(collage.width * s), int(collage.height * s)), Image.LANCZOS)
     cfull = cbg.copy()
-    cfull.paste(cfit, ((W - cfit.width) // 2, 0))
+    cfull.paste(cfit, ((W - cfit.width) // 2, (H - cfit.height) // 2))
 
     def s_open(t, dur=6.3):
         # Hook: the news is on screen from the very first frame.
-        fr = photo_frame(p1, t, dur, fit_box(960, 700, 900, p1), fit_box(960, 740, 800, p1))
-        fr.alpha_composite(GRAD_TOP)
+        if REEL:
+            fr = band_frame(p1, t, dur, (900, 640, 1500), (960, 700, 1250))
+        else:
+            fr = photo_frame(p1, t, dur, fit_box(960, 700, 900, p1), fit_box(960, 740, 800, p1))
+            fr.alpha_composite(GRAD_TOP)
+        top_y, text_y = (250, 1215) if REEL else (112, 880)
         hp = ease_out((t - 0.9) / 0.5)
         if hp > 0:
             hl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             beat = 1 + 0.07 * max(0, math.sin((t - 0.9) * 2 * math.pi * 1.1)) ** 6
             over = 1 + 0.25 * math.sin(min(hp, 1) * math.pi) * (1 - hp)
-            heart(ImageDraw.Draw(hl), W / 2, 112, 2.6 * hp * beat * over, (240, 60, 80, int(255 * hp)))
+            heart(ImageDraw.Draw(hl), W / 2, top_y, 2.6 * hp * beat * over, (240, 60, 80, int(255 * hp)))
             fr.alpha_composite(hl.filter(ImageFilter.GaussianBlur(14)))
             fr.alpha_composite(hl)
         top = [
             L("A proud and emotional milestone", 0.6, 50, F_BOLD),
             L([("for ", WHITE), ("Game2Grow!", ACCENT)], 0.85, 50, F_BOLD),
         ]
-        draw_lines(fr, top, t, 170, gap=8)
+        draw_lines(fr, top, t, top_y + 58, gap=8)
         lines = [
             L("Game2Grow has signed its", -0.55, 58, F_SEMI),
             L([("FIRST MoU", ACCENT)], -0.5, 150, F_BLACK, underline=True),
             L("with SNS!", -0.45, 84, F_XBOLD),
         ]
-        draw_lines(fr, lines, t, 880, gap=10)
+        draw_lines(fr, lines, t, text_y, gap=10)
         return fr
 
     def s_special(t, dur=6.3):
@@ -258,7 +303,7 @@ def build_scenes(p1, p2, collage):
             L("is not just another", 1.0, 60, F_SEMI),
             L("institution for me.", 1.3, 60, F_SEMI),
         ]
-        draw_lines(fr, lines, t, 840)
+        draw_lines(fr, lines, t, 840 + DY)
         return fr
 
     def s_mba(t, dur=8.3):
@@ -270,13 +315,13 @@ def build_scenes(p1, p2, collage):
             L("It is the place where", 0.4, 62, F_SEMI),
             L([("I pursued my ", WHITE), ("MBA,", ACCENT)], 0.7, 86, F_XBOLD),
         ]
-        draw_lines(fr, head, t, 250)
+        draw_lines(fr, head, t, 250 + DY)
         items = ["discovered my potential,", "gained confidence,", "and found the courage", "to face the world."]
         starts = [1.7, 2.9, 4.1, 4.4]
         layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(layer)
         f = font(F_BOLD, 56)
-        y = 620
+        y = 620 + DY
         for i, (txt, st) in enumerate(zip(items, starts)):
             p = ease_out((t - st) / 0.6)
             if p > 0:
@@ -296,25 +341,31 @@ def build_scenes(p1, p2, collage):
     def s_years(t, dur=6.3):
         b0 = fit_box(560, 700, 1000, audience)
         b1 = fit_box(600, 640, 860, audience)
-        fr = photo_frame(audience, t, dur, b0, b1)
-        kicker(fr, "YEARS AGO", t, 0.3, 790)
+        if REEL:
+            fr = band_frame(audience, t, dur, (560, 1000, 1120), (600, 1050, 960))
+        else:
+            fr = photo_frame(audience, t, dur, b0, b1)
+        kicker(fr, "YEARS AGO", t, 0.3, 1130 if REEL else 790)
         lines = [
             L("Years ago, I walked", 0.5, 66, F_BOLD),
             L("into this campus as a", 0.8, 66, F_BOLD),
             L([("student", ACCENT), (" with dreams.", WHITE)], 1.1, 66, F_BOLD),
         ]
-        draw_lines(fr, lines, t, 880)
+        draw_lines(fr, lines, t, 1220 if REEL else 880)
         return fr
 
     def s_today(t, dur=7.3):
-        fr = photo_frame(p2, t, dur, fit_box(900, 700, 1000, p2), fit_box(960, 760, 820, p2))
-        kicker(fr, "TODAY", t, 0.3, 790)
+        if REEL:
+            fr = band_frame(p2, t, dur, (850, 720, 1500), (960, 780, 1150))
+        else:
+            fr = photo_frame(p2, t, dur, fit_box(900, 700, 1000, p2), fit_box(960, 760, 820, p2))
+        kicker(fr, "TODAY", t, 0.3, 1130 if REEL else 790)
         lines = [
             L("Today, I walk back", 0.5, 66, F_BOLD),
             L([("as an ", WHITE), ("entrepreneur,", ACCENT)], 0.85, 76, F_XBOLD),
             L("with a dream of my own.", 1.5, 62, F_BOLD),
         ]
-        draw_lines(fr, lines, t, 880)
+        draw_lines(fr, lines, t, 1220 if REEL else 880)
         return fr
 
     def s_outro(t):
@@ -322,12 +373,12 @@ def build_scenes(p1, p2, collage):
         lines = [
             L([("Game", WHITE), ("2", ACCENT), ("Grow", WHITE)], 0.3, 120, F_BLACK),
         ]
-        draw_lines(fr, lines, t, 400)
+        draw_lines(fr, lines, t, 400 + DY)
         cta = [
             L("Want experiential training", 1.0, 56, F_BOLD),
             L([("for your ", WHITE), ("campus or team?", ACCENT)], 1.3, 56, F_BOLD),
         ]
-        draw_lines(fr, cta, t, 600, gap=14)
+        draw_lines(fr, cta, t, 600 + DY, gap=14)
         p2_ = ease_out((t - 2.1) / 0.8)
         if p2_ > 0:
             l2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -337,8 +388,8 @@ def build_scenes(p1, p2, collage):
             txt = "game2growsolutions.com"
             tw = d2.textlength(txt, font=f)
             pw, ph = (tw + 90) * (0.9 + 0.1 * p2_), 96
-            d2.rounded_rectangle((W / 2 - pw / 2, 820, W / 2 + pw / 2, 820 + ph), ph / 2, fill=CORAL + (a,))
-            d2.text((W / 2, 820 + ph / 2), txt, font=f, fill=WHITE + (a,), anchor="mm")
+            d2.rounded_rectangle((W / 2 - pw / 2, 820 + DY, W / 2 + pw / 2, 820 + DY + ph), ph / 2, fill=CORAL + (a,))
+            d2.text((W / 2, 820 + DY + ph / 2), txt, font=f, fill=WHITE + (a,), anchor="mm")
             fr.alpha_composite(l2)
         return fr
 
