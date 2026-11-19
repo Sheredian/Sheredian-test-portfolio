@@ -1,7 +1,8 @@
 """Kids learning version: short chunks, words light up one by one, read then repeat, verse cards, recap."""
-import math, subprocess, sys
+import math, os, subprocess, sys
 from PIL import Image, ImageDraw, ImageFont
 from art import hallen, jesus, mom, heart
+from voices import clip
 from render import (put, put_c, camera, notes, birds, ease, blink, chip, wrap, music, jesus_with_glow,
                     BG, BG_SEPIA, SMALLGLOW, ICONS, ICONS7, HX, HY, JX, JY, W, H, FPS, TA)
 
@@ -51,41 +52,60 @@ def add(scene, dur, kind=None, who=None, label=None, text=None, **kw):
     return seg
 
 
-def say_dur(text):
-    return max(3.5, 0.6 * len(text.split()) + 2.4)
+PRE = 0.35
+NUMW = ['ஒன்று', 'இரண்டு', 'மூன்று', 'நான்கு', 'ஐந்து']
+VOICE_OF = {HL: 'kid', J: 'jesus'}
+CUES = []  # (time, wav)
 
 
-def kar_dur(text):
-    return PER_WORD * len(text.split()) + 1.6
+def spoken(scene, kind, who, label, text, gap, minimum=0.0, **kw):
+    wav, dur, words = clip(VOICE_OF[who], text)
+    seg = add(scene, max(minimum, PRE + dur + gap), kind, who, label, text, vdur=dur, vwords=words, **kw)
+    CUES.append((seg['start'] + PRE, wav))
+    return seg
 
 
-add(0, 3.2, 'title')
-add(0, say_dur('x x x x x'), 'say', HL, HL, 'இயேசப்பா… இந்த வசனம் எனக்குப் புரியலையே.')
-add(0, 0.6)
+def voice_only(who, text, at):
+    wav, dur, words = clip(VOICE_OF[who], text)
+    CUES.append((at, wav))
+    return dur
+
+
+title = add(0, 3.6, 'title')
+voice_only(HL, 'ஹாலனும் இயேசுவும்!', 0.6)
+spoken(0, 'say', HL, HL, 'இயேசப்பா… இந்த வசனம் எனக்குப் புரியலையே.', 0.9)
 add(1, 4.6)
-add(1, say_dur('x x x x x x'), 'say', J, J, 'வா ஹாலன். நாம ரெண்டு பேரும் சேர்ந்து படிப்போம்.')
-add(1, 0.6)
+spoken(1, 'say', J, J, 'வா ஹாலன். நாம ரெண்டு பேரும் சேர்ந்து படிப்போம்.', 0.9)
 for n, (sc, idea, chunks, simple, reply) in enumerate(VERSES, 1):
     if sc == 5:
         EV['flash'] = (_t, _t + 5.0)
         add(sc, 5.0, 'flash')
-    add(sc, 3.4, 'card', num=n, idea=idea)
+    d = voice_only(HL, f'வசனம் {NUMW[n - 1]}! {idea}!', _t + 0.5)
+    add(sc, max(3.4, d + 1.4), 'card', num=n, idea=idea)
     for c in chunks:
-        add(sc, kar_dur(c), 'read', J, READ_LAB, c)
-        add(sc, kar_dur(c), 'repeat', HL, REP_LAB, c)
-    seg = add(sc, say_dur(simple), 'say', J, J, simple)
+        spoken(sc, 'read', J, READ_LAB, c, 0.9)
+        spoken(sc, 'repeat', HL, REP_LAB, c, 1.4)
+    seg = spoken(sc, 'say', J, J, simple, 1.0)
     EV[f'simple{sc}'] = seg['start']
     if reply:
-        seg = add(sc, say_dur(reply) + (1.5 if sc == 6 else 0), 'say', HL, HL, reply)
-        EV[f'reply{sc}'] = (seg['start'], seg['end'])
-    add(sc, 0.8)
+        seg = spoken(sc, 'say', HL, HL, reply, 1.2)
+        EV[f'reply{sc}'] = (seg['start'] + PRE, seg['start'] + PRE + seg['vdur'])
+    add(sc, 0.6)
 add(7, 2.0)
-add(7, say_dur('x x x x x x x x'), 'say', HL, HL, 'அம்மா! இன்னைக்கு கடவுள் எனக்கு என்ன நல்லது செய்தார் தெரியுமா?')
-add(7, 1.2)
+spoken(7, 'say', HL, HL, 'அம்மா! இன்னைக்கு கடவுள் எனக்கு என்ன நல்லது செய்தார் தெரியுமா?', 1.6)
 EV['recap'] = _t
-add(7, 3.0 + 3.0 * len(RECAP), 'recap')
+rt = _t + 0.8
+voice_only(HL, 'இன்று நாம் கற்றது!', rt)
+rt += 2.6
+EV['recap_slots'] = []
+for i, line in enumerate(RECAP):
+    EV['recap_slots'].append(rt - EV['recap'])
+    rt += voice_only(HL, f'{NUMW[i]}. {line}.', rt) + 1.0
+add(7, rt - EV['recap'] + 0.6, 'recap')
 EV['end'] = _t
-add(7, 8.0, 'end')
+q = 'இன்று கடவுள் உங்களுக்கு செய்த நல்லது என்ன? கமெண்டில் சொல்லுங்கள்!'
+d = voice_only(HL, q, _t + 1.2)
+add(7, max(8.0, d + 4.0), 'end')
 TOTAL = _t
 SC_ORDER = sorted(SC_START.items(), key=lambda kv: kv[1])
 VNUM = {sc: i for i, (sc, *_r) in enumerate(VERSES, 1)}
@@ -108,13 +128,46 @@ def scene_of(t):
 
 def speaking(t, who):
     s = seg_at(t)
-    return s['who'] == who and s['kind'] in ('say', 'read', 'repeat') and t < s['end'] - 0.5
+    if s['who'] != who or 'vdur' not in s:
+        return False
+    return s['start'] + PRE <= t < s['start'] + PRE + s['vdur'] - 0.15
 
 
 def mouth_for(t, who, default='smile'):
     if speaking(t, who):
         return 'open' if int(t * 7) % 2 == 0 else default
     return default
+
+
+def lit_count(seg, t, nwords):
+    el = t - seg['start'] - PRE
+    if el < 0:
+        return 0
+    ws = seg.get('vwords') or []
+    if not ws:
+        return min(nwords, int(el / PER_WORD) + 1)
+    nb = sum(1 for w in ws if w <= el + 0.05)
+    return min(nwords, round(nb * nwords / len(ws)))
+
+
+def mix_audio(path):
+    import wave
+    import numpy as np
+    music('music.wav', dur=TOTAL)
+    with wave.open('music.wav') as w:
+        m = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
+    out = m * 0.32
+    for at, wav in CUES:
+        with wave.open(wav) as w:
+            v = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
+        i = int(at * 44100)
+        j = min(len(out), i + len(v))
+        out[i:j] += v[:j - i] * 0.95
+    out /= max(1.0, np.abs(out).max() / 0.95)
+    with wave.open(path, 'wb') as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100)
+        w.writeframes((out * 32767).astype(np.int16).tobytes())
+    os.remove('music.wav')
 
 
 # ------------------------------------------------------------------ text boxes
@@ -150,8 +203,7 @@ def text_box(fr, seg, t):
         bg, labc, lit = (20, 16, 24, 200), ((255, 210, 120, 255) if seg['who'] == J else (150, 236, 205, 255)), None
     d.rounded_rectangle([0, 0, 679, h - 1], 30, fill=bg)
     d.text((32, 16), seg['label'], font=F_L, fill=labc)
-    lt = t - seg['start'] - 0.5
-    nlit = len(words) if lit is None else max(0, min(len(words), int(lt / PER_WORD) + 1)) if lt >= 0 else 0
+    nlit = len(words) if lit is None else lit_count(seg, t, len(words))
     k = 0
     for li, ln in enumerate(lines):
         tw = sum(wl for _, wl in ln) + sp * (len(ln) - 1)
@@ -196,14 +248,14 @@ def recap(fr, t):
     ttl = 'இன்று நாம் கற்றது'
     d.text((360 - F_T.getlength(ttl) / 2, 240), ttl, font=F_T, fill=(255, 236, 190, int(255 * a)))
     for i, line in enumerate(RECAP):
-        p = ease((lt - 2.0 - i * 3.0) / 0.6)
+        p = ease((lt - EV['recap_slots'][i]) / 0.6)
         if p <= 0:
             continue
         y = 400 + i * 130
         x = 46 + (1 - p) * 40
         d.ellipse([x, y, x + 76, y + 76], fill=(255, 214, 90, int(255 * p)))
         d.text((x + 38 - F_S.getlength(str(i + 1)) / 2, y + 8), str(i + 1), font=F_S, fill=(110, 50, 20, int(255 * p)))
-        now = (lt - 2.0 - i * 3.0) < 3.0
+        now = i == len(RECAP) - 1 or lt < EV['recap_slots'][i + 1]
         d.text((x + 100, y + 14), line, font=F_R, fill=((255, 214, 90) if now else (255, 255, 255)) + (int(255 * p),))
 
 
@@ -350,9 +402,9 @@ if __name__ == '__main__':
             print(round(s['start'], 1), s['scene'], s['kind'], (s['text'] or '')[:30])
         sys.exit()
     out = sys.argv[1]
-    music('music.wav', dur=TOTAL)
+    mix_audio('audio.wav')
     p = subprocess.Popen(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24',
-                          '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-', '-i', 'music.wav',
+                          '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-', '-i', 'audio.wav',
                           '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p',
                           '-c:a', 'aac', '-b:a', '128k', '-shortest', '-movflags', '+faststart', out],
                          stdin=subprocess.PIPE)
@@ -363,4 +415,5 @@ if __name__ == '__main__':
             print('frame', i, '/', N, flush=True)
     p.stdin.close()
     p.wait()
+    os.remove('audio.wav')
     print('done', out)
